@@ -1,5 +1,7 @@
+using System;
 using System.Threading.Tasks;
 using API.Dto;
+using API.Errors;
 using API.Extensions;
 using AutoMapper;
 using Core.Entities.Identity;
@@ -30,7 +32,12 @@ namespace API.Controllers
         public async Task<ActionResult<UserDto>> GetCurrentUser()
         {
             var user = await _usermanager.FindByEmailFromClaimsPrinciple(HttpContext.User);
-            return new UserDto { DisplayName = user.DisplayName, Email = user.Email, Token = await _token.CreateToken(user) };
+            return new UserDto
+            {
+                DisplayName = user.DisplayName,
+                Email = user.Email,
+                Token = await _token.CreateToken(user, DateTime.Now.AddDays(90))
+            };
 
         }
 
@@ -67,15 +74,22 @@ namespace API.Controllers
             if (user == null) return Unauthorized("Email not found");
             var result = await _signInManager.CheckPasswordSignInAsync(user, login.Password, false);
             if (!result.Succeeded) return Unauthorized("Invalid Password");
-
+            var userRoles = await _usermanager.GetRolesAsync(user);
+            var expToken = DateTime.Now.AddDays(90);
+            var refreshToken = _token.GenerateReffreshToken();
+            user.RefreshToken = refreshToken;
+            user.RefreshTokenExpiry = expToken;
+            await _usermanager.UpdateAsync(user);
             return new UserDto
             {
                 DisplayName = user.DisplayName,
-                Token = await _token.CreateToken(user),
-                Email = user.Email
+                Token = await _token.CreateToken(user, expToken),
+                Email = user.Email,
+                Roles = userRoles,
+                RefreshTokenExpiry = expToken,
+                RefreshToken = refreshToken
             };
         }
-
         [HttpPost("register")]
         public async Task<ActionResult<UserDto>> Register(RegisterDto registerDto)
         {
@@ -93,12 +107,50 @@ namespace API.Controllers
             if (!result.Succeeded) return BadRequest("Failed creating user");
             var roleAddResult = await _usermanager.AddToRoleAsync(user, "Member");
             if (!roleAddResult.Succeeded) return BadRequest("Failed to adding role");
+            var userRoles = await _usermanager.GetRolesAsync(user);
+            var expToken = DateTime.Now.AddDays(90);
+            var refreshToken = _token.GenerateReffreshToken();
+            user.RefreshToken = refreshToken;
+            user.RefreshTokenExpiry = expToken;
+            await _usermanager.UpdateAsync(user);
             return new UserDto
             {
                 DisplayName = user.DisplayName,
                 Email = user.Email,
-                Token = await _token.CreateToken(user)
+                Token = await _token.CreateToken(user, expToken),
+                RefreshToken = refreshToken,
+                RefreshTokenExpiry = expToken,
+                Roles = userRoles
             };
+        }
+        [HttpGet("validateRefreshToken")]
+        public async Task<ActionResult<UserDto>> ValidateRefreshToken(string email, string rfshToken)
+        {
+            var user = await _usermanager.FindByEmailAsync(email);
+            if (user == null)
+            {
+                return NotFound(new ApiResponse(404, "User not found"));
+            }
+            var test = user.RefreshToken == rfshToken;
+            if (user.RefreshToken == rfshToken && user.RefreshTokenExpiry > DateTime.Now)
+            {
+                var expToken = DateTime.Now.AddDays(90);
+                var refreshToken = _token.GenerateReffreshToken();
+                var userRoles = await _usermanager.GetRolesAsync(user);
+                user.RefreshToken = refreshToken;
+                user.RefreshTokenExpiry = expToken;
+                await _usermanager.UpdateAsync(user);
+                return new UserDto
+                {
+                    DisplayName = user.DisplayName,
+                    Token = await _token.CreateToken(user, expToken),
+                    Email = user.Email,
+                    RefreshToken = refreshToken,
+                    RefreshTokenExpiry = expToken,
+                    Roles = userRoles
+                };
+            }
+            return BadRequest(new ApiResponse(400, "Invalid refresh token"));
         }
     }
 }
