@@ -123,6 +123,7 @@ namespace API.Controllers
                 Roles = userRoles
             };
         }
+        [AllowAnonymous]
         [HttpGet("validateRefreshToken")]
         public async Task<ActionResult<UserDto>> ValidateRefreshToken(string email, string rfshToken)
         {
